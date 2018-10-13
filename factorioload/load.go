@@ -70,7 +70,7 @@ func findGameDir() (string, error) {
 			testDirs = append(testDirs, path)
 		}
 		testDirs = append(testDirs, `/Applications/factorio.app/Contents`)
-	default:  // linux, etc.
+	default: // linux, etc.
 		path, err := homedir.Expand(`~/.steam/steam/SteamApps/common/Factorio`)
 		if err == nil {
 			testDirs = append(testDirs, path)

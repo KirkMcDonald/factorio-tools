@@ -61,8 +61,8 @@ func main() {
 	}
 
 	imagePath := "/images/sprite-sheet-" + data.SpriteHash + ".png"
-	overrides := map[string][]byte {
-		imagePath: data.SpriteSheet,
+	overrides := map[string][]byte{
+		imagePath:                               data.SpriteSheet,
 		"/data/local-" + data.Version + ".json": []byte(data.Normal),
 		"/data/local-" + data.Version + "-expensive.json": []byte(data.Expensive),
 		"/override.js": getOverride(data.Version),
@@ -86,7 +86,7 @@ func main() {
 	}
 	handler := &overrideHandler{
 		overrides: overrides,
-		handler: http.FileServer(calcBox),
+		handler:   http.FileServer(calcBox),
 	}
 	http.Handle("/", handler)
 	// Block forever.

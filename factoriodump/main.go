@@ -52,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	spritePath := filepath.Join(*calcDir, "images", "sprite-sheet-" + data.SpriteHash + ".png")
+	spritePath := filepath.Join(*calcDir, "images", "sprite-sheet-"+data.SpriteHash+".png")
 	checkPathExists(spritePath, "Sprite sheet")
 	normalDataPath := filepath.Join(*calcDir, "data", fmt.Sprintf("%s-%s.json", *prefix, data.Version))
 	checkPathExists(normalDataPath, "Data set")
