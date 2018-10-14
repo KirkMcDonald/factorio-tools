@@ -56,30 +56,7 @@ func findGameDir() (string, error) {
 		binDir,
 		".",
 	}
-	switch runtime.GOOS {
-	case "windows":
-		testDirs = append(testDirs,
-			`C:\Program Files (x86)\Steam\steamapps\common\Factorio`,
-			`C:\Program Files\Factorio`,
-			// Where I've got it on my machine.
-			`F:\Games\Steam\steamapps\common\Factorio`,
-		)
-	case "darwin":
-		path, err := homedir.Expand(`~/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app/Contents`)
-		if err == nil {
-			testDirs = append(testDirs, path)
-		}
-		testDirs = append(testDirs, `/Applications/factorio.app/Contents`)
-	default: // linux, etc.
-		path, err := homedir.Expand(`~/.steam/steam/SteamApps/common/Factorio`)
-		if err == nil {
-			testDirs = append(testDirs, path)
-		}
-		path, err = homedir.Expand(`~/.factorio`)
-		if err == nil {
-			testDirs = append(testDirs, path)
-		}
-	}
+	testDirs = append(testDirs, getPaths()...)
 	for _, path := range testDirs {
 		if validGameDir(path) {
 			return path, nil
