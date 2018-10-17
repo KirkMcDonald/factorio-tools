@@ -22,7 +22,7 @@ import (
 )
 
 var gameDir = flag.String("gamedir", "", "Factorio installation directory")
-var dataDir = flag.String("datadir", "", "User data directory (e.g. ~/.factorio)")
+var modDir = flag.String("moddir", "", "User mod directory (e.g. ~/.factorio/mods)")
 
 const (
 	pxWidth  = 32
@@ -65,18 +65,18 @@ func findGameDir() (string, error) {
 	return "", errors.New("Factorio game directory not found.")
 }
 
-func validDataDir(path string) bool {
-	p := filepath.Join(path, "mods", "mod-list.json")
+func validModDir(path string) bool {
+	p := filepath.Join(path, "mod-list.json")
 	_, err := os.Stat(p)
 	return err == nil
 }
 
-func findDataDir() (string, error) {
-	if *dataDir != "" {
-		if !validDataDir(*dataDir) {
-			return "", errors.New("invalid data dir: " + *dataDir)
+func findModDir() (string, error) {
+	if *modDir != "" {
+		if !validModDir(*modDir) {
+			return "", errors.New("invalid mod dir: " + *modDir)
 		}
-		return *dataDir, nil
+		return *modDir, nil
 	}
 	bin, err := os.Executable()
 	if err != nil {
@@ -104,11 +104,15 @@ func findDataDir() (string, error) {
 		}
 	}
 	for _, path := range testDirs {
-		if validDataDir(path) {
+		modsSubDir := filepath.Join(path, "mods")
+		if validModDir(modsSubDir) {
+			return modsSubDir, nil
+		}
+		if validModDir(path) {
 			return path, nil
 		}
 	}
-	return "", errors.New("Factorio user data directory not found.")
+	return "", errors.New("Factorio mod directory not found.")
 }
 
 type boxLoader struct {
@@ -191,7 +195,7 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	if err != nil {
 		return FactorioData{}, err
 	}
-	dataDir, err := findDataDir()
+	modDir, err := findModDir()
 	if err != nil {
 		return FactorioData{}, err
 	}
@@ -220,8 +224,7 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	}
 	L.GetField(-1, "load_data")
 	L.PushString(gameDir)
-	modPath := filepath.Join(dataDir, "mods")
-	L.PushString(modPath)
+	L.PushString(modDir)
 	err = L.Call(2, 0)
 	if err != nil {
 		return FactorioData{}, err
