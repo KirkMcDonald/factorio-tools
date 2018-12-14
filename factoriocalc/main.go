@@ -15,7 +15,7 @@ import (
 	"github.com/gobuffalo/packr"
 	"github.com/skratchdot/open-golang/open"
 
-	"github.com/KirkMcDonald/factorio-go/factorioload"
+	"github.com/KirkMcDonald/factorio-tools/factorioload"
 )
 
 var httpAddr = flag.String("http-addr", "localhost:8000", "Address on which to serve calculator.")
