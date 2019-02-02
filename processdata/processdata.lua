@@ -114,7 +114,7 @@ function Process.process_data(data, verbose)
 	end
 	local items = {}
 	local fuel = {}
-	local item_attrs = {"category", "effect", "fuel_category", "fuel_value", "icon", "icons", "limitation", "name", "order", "subgroup", "type"}
+	local item_attrs = {"category", "effect", "fuel_category", "fuel_value", "icon", "icons", "limitation", "name", "order", "stack_size", "subgroup", "type"}
 	for i, item_type in ipairs(item_types) do
 		for name, item in pairs(data[item_type]) do
 			local new_item = {}
