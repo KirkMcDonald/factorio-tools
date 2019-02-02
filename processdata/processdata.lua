@@ -287,6 +287,7 @@ function Process.process_data(data, verbose)
 		["resource"] = {"category", "minable"},
 		["rocket-silo"] = {"active_energy_usage", "allowed_effects", "crafting_categories", "crafting_speed", "energy_usage", "idle_energy_usage", "lamp_energy_usage", "module_specification", "rocket_parts_required"},
 		["solar-panel"] = {"production"},
+        ["transport-belt"] = {"speed"},
 	}
 	for entity_type, attrs in pairs(entity_attrs) do
 		local entities = {}
