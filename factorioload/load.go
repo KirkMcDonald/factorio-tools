@@ -225,10 +225,11 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.GetField(-1, "load_data")
 	L.PushString(gameDir)
 	L.PushString(modDir)
-	err = L.Call(2, 0)
+	err = L.Call(2, 1)
 	if err != nil {
 		return FactorioData{}, err
 	}
+	locales := L.GetTop()
 	if verbose {
 		fmt.Fprintln(os.Stderr, "data loaded")
 	}
@@ -244,8 +245,9 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.GetGlobal("data")
 	L.GetField(-1, "raw")
 	L.Remove(-2)
+	L.PushValue(locales)
 	L.PushBoolean(verbose)
-	err = L.Call(2, 1)
+	err = L.Call(3, 1)
 	if err != nil {
 		return FactorioData{}, err
 	}
