@@ -15,7 +15,7 @@ local function get_icon(data, path)
 	if unique_paths[path] ~= nil then
 		path = unique_paths[path]
 	end
-	local mod_name, icon_path = string.match(path, "__([%w_%-]+)__/(.*)")
+	local mod_name, icon_path = string.match(path, "__([%w%s_%-]+)__/(.*)")
 	local mod = data.module_info[mod_name]
 	if mod.localPath ~= nil then
 		local fullpath = mod.localPath .. "/" .. icon_path
