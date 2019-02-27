@@ -38,6 +38,11 @@ local function normalize_recipe(r)
 		r.result = nil
 		r.result_count = nil
 	end
+	for i, result in ipairs(r.results) do
+		if result.amount == nil then
+			r.results[i] = {name = result[1], amount = result[2]}
+		end
+	end
 	if r.energy_required == nil then
 		r.energy_required = 0.5
 	end
@@ -95,7 +100,7 @@ end
 
 -- XXX: We don't actually need this yet.
 local function localize_name(locale, name)
-    return "<dummy name>"
+	return "<dummy name>"
 end
 
 function Process.process_data(data, locales, verbose)
@@ -104,35 +109,35 @@ function Process.process_data(data, locales, verbose)
 			print(...)
 		end
 	end
-    local function assign_localized_name(locale, raw_object, new_object, fallback)
-        local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name"}
-        if raw_object.localised_name then
-            new_object.localized_name = {en = localize_name(locale, raw_object.localised_name)}
-        else
-            local localized_name = nil
-            for _, obj in ipairs({raw_object, fallback}) do
-                for _, section in ipairs(locale_sections) do
-                    localized_name = locale[section][obj.name]
-                    if localized_name ~= nil then
-                        goto found
-                    end
-                end
-            end
-            ::found::
-            if localized_name == nil then
-                msg("no localized name for", raw_object.type, "named", raw_object.name)
-            else
-                localized_name = localized_name:gsub("__(%S*)__(%S*)__", function(section, name)
-                    section = section:lower() .. "-name"
-                    return locale[section][name]
-                end)
-                new_object.localized_name = {en = localized_name}
-            end
-        end
-    end
+	local function assign_localized_name(locale, raw_object, new_object, fallback)
+		local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name"}
+		if raw_object.localised_name then
+			new_object.localized_name = {en = localize_name(locale, raw_object.localised_name)}
+		else
+			local localized_name = nil
+			for _, obj in ipairs({raw_object, fallback}) do
+				for _, section in ipairs(locale_sections) do
+					localized_name = locale[section][obj.name]
+					if localized_name ~= nil then
+						goto found
+					end
+				end
+			end
+			::found::
+			if localized_name == nil then
+				msg("no localized name for", raw_object.type, "named", raw_object.name)
+			else
+				localized_name = localized_name:gsub("__(%S*)__(%S*)__", function(section, name)
+					section = section:lower() .. "-name"
+					return locale[section][name]
+				end)
+				new_object.localized_name = {en = localized_name}
+			end
+		end
+	end
 
-    -- Limit it to English for now.
-    local locale = locales["en"]
+	-- Limit it to English for now.
+	local locale = locales["en"]
 	local item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "tool"}
 	local no_module_icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]
 	local clock_icon = data["utility-sprites"]["default"]["clock"]["filename"]
@@ -157,7 +162,7 @@ function Process.process_data(data, locales, verbose)
 					new_item[attr] = item[attr]
 				end
 			end
-            assign_localized_name(locale, item, new_item)
+			assign_localized_name(locale, item, new_item)
 			item = new_item
 			local subgroup
 			if item.subgroup ~= nil then
@@ -290,7 +295,7 @@ function Process.process_data(data, locales, verbose)
 			end
 			icon_paths[recipe.icon] = true
 			normalize_recipe(recipe)
-            assign_localized_name(locale, raw_recipe, recipe, recipe.results[1])
+			assign_localized_name(locale, raw_recipe, recipe, recipe.results[1])
 			r.recipes[name] = recipe
 			::continue::
 		end
@@ -323,7 +328,7 @@ function Process.process_data(data, locales, verbose)
 		["resource"] = {"category", "minable"},
 		["rocket-silo"] = {"active_energy_usage", "allowed_effects", "crafting_categories", "crafting_speed", "energy_usage", "idle_energy_usage", "lamp_energy_usage", "module_specification", "rocket_parts_required"},
 		["solar-panel"] = {"production"},
-        ["transport-belt"] = {"speed"},
+		["transport-belt"] = {"speed"},
 	}
 	for entity_type, attrs in pairs(entity_attrs) do
 		local entities = {}
@@ -335,7 +340,7 @@ function Process.process_data(data, locales, verbose)
 			end
 			icon_paths[entity["icon"]] = true
 			local new_entity = {name = entity.name, icon = entity.icon}
-            assign_localized_name(locale, entity, new_entity)
+			assign_localized_name(locale, entity, new_entity)
 			local has_modules = false
 			for i, attr in ipairs(attrs) do
 				if attr == "module_specification" then
@@ -412,7 +417,7 @@ function Process.process_data(data, locales, verbose)
 			end
 		end
 	end
-    local version = data["module_info"]["core"]["version"]
+	local version = data["module_info"]["core"]["version"]
 	return {
 		data = new_data,
 		normal = normal_recipes,
