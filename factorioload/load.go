@@ -9,7 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/draw"
+	"golang.org/x/image/draw"
 	"image/png"
 	"io"
 	"os"
@@ -327,7 +327,8 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 		col := i % width
 		dest := image.Point{col * pxWidth, row * pxHeight}
 		r := image.Rectangle{dest, dest.Add(image.Point{pxWidth, pxHeight})}
-		draw.Draw(im, r, icon, image.ZP, draw.Src)
+		r2 = image.Rectangle{image.ZP, image.Point{icon.Bounds().Dy(), icon.Bounds().Dy()}}
+		draw.NearestNeighbor.Scale(im, r, icon, r2 , draw.Over, nil)
 		// pop current icon
 		L.Pop(1)
 	}
