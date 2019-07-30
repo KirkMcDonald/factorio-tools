@@ -327,7 +327,13 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 		col := i % width
 		dest := image.Point{col * pxWidth, row * pxHeight}
 		r := image.Rectangle{dest, dest.Add(image.Point{pxWidth, pxHeight})}
-		draw.Draw(im, r, icon, image.ZP, draw.Src)
+		sourcePoint := image.ZP
+		// XXX: A hack: If the icon is 64 pixels high, assume it is a mipmap
+		// and grab from the 32x32 version.
+		if icon.Bounds().Max.Y == 64 {
+			sourcePoint = image.Point{64, 0}
+		}
+		draw.Draw(im, r, icon, sourcePoint, draw.Src)
 		// pop current icon
 		L.Pop(1)
 	}
