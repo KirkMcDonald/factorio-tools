@@ -366,6 +366,10 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.GetField(-1, "sprites")
 	L.PushString(hexDigest)
 	L.SetField(-2, "hash")
+	L.PushInteger(int64(imageWidth))
+	L.SetField(-2, "width")
+	L.PushInteger(int64(imageHeight))
+	L.SetField(-2, "height")
 	L.Pop(1)
 	// [..., return value, data]
 	L.GetField(-2, "normal")
