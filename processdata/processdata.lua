@@ -239,7 +239,12 @@ function Process.process_data(data, locales, verbose)
 				if recipe.result ~= nil then
 					result = recipe["result"]
 				else
-					result = recipe["results"][1]["name"]
+					local entry = recipe["results"][1]
+					if entry.name ~= nil then
+						result = entry["name"]
+					else
+						result = entry[1]
+					end
 				end
 				if recipe.main_product ~= nil and recipe.main_product ~= "" then
 					if recipe["main_product"] ~= result then
@@ -322,6 +327,15 @@ function Process.process_data(data, locales, verbose)
 		local entities = {}
 		new_data[entity_type] = entities
 		for name, entity in pairs(data[entity_type]) do
+			-- skip "hidden" entities (e.g. crash site assemblers)
+			if entity.flags ~= nil then
+				for i, flag in ipairs(entity.flags) do
+					if flag == "hidden" then
+						msg("hidden entity:", name)
+						goto continue
+					end
+				end
+			end
 			if entity.icon == nil then
 				msg("entity missing icon:", name)
 				entity["icon"] = missing_icon
@@ -356,6 +370,7 @@ function Process.process_data(data, locales, verbose)
 				end
 			end
 			entities[name] = new_entity
+			::continue::
 		end
 		new_data[entity_type] = entities
 	end
