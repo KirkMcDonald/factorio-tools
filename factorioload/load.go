@@ -9,7 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/draw"
+	"golang.org/x/image/draw"
 	"image/png"
 	"io"
 	"os"
@@ -328,12 +328,24 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 		dest := image.Point{col * pxWidth, row * pxHeight}
 		r := image.Rectangle{dest, dest.Add(image.Point{pxWidth, pxHeight})}
 		sourcePoint := image.ZP
-		// XXX: A hack: If the icon is 64 pixels high, assume it is a mipmap
-		// and grab from the 32x32 version.
-		if icon.Bounds().Max.Y == 64 {
+		// There are three kinds of icon files, which we need to treat in
+		// three differen ways:
+		//   - 32x32 images. Use these unchanged.
+		//   - 120x64 mipmaps. Grab the 32x32 image at offset (64, 0).
+		//   - Square icons of larger size, usually 64x64. Scale these to
+		//     32x32.
+		// XXX: Ideally we'd actually use the relevant "icon_mipmaps" value,
+		//      but as a hack this works for now.
+		iconWidth := icon.Bounds().Max.X
+		iconHeight := icon.Bounds().Max.Y
+		if iconWidth == 120 && iconHeight == 64 {
 			sourcePoint = image.Point{64, 0}
 		}
-		draw.Draw(im, r, icon, sourcePoint, draw.Src)
+		if iconWidth == 32 && iconHeight == 32 || sourcePoint != image.ZP {
+			draw.Draw(im, r, icon, sourcePoint, draw.Src)
+		} else {
+			draw.BiLinear.Scale(im, r, icon, icon.Bounds(), draw.Src, nil)
+		}
 		// pop current icon
 		L.Pop(1)
 	}
