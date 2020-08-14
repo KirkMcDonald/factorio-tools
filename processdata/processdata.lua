@@ -213,12 +213,13 @@ function Process.process_data(data, locales, verbose)
 	local normal_recipes = {}
 	local expensive_recipes = {}
 	for name, raw_recipe in pairs(data["recipe"]) do
-		--for recipe_type, recipes in [("normal", normal_recipes), ("expensive", expensive_recipes)]:
 		for i, r in ipairs({{recipe_type = "normal", recipes = normal_recipes}, {recipe_type = "expensive", recipes = expensive_recipes}}) do
-			--overlap = set(raw_recipe.get(recipe_type, {})) & set(raw_recipe)
-			--if overlap:
-			--	print("overlap:", recipe_type, name, overlap)
 			local recipe = copytable(raw_recipe)
+			-- If a recipe defines a 'normal' table, but no corresponding
+			-- 'expensive' table, then reuse the normal table for both.
+			if recipe.normal ~= nil and recipe.expensive == nil then
+				recipe.expensive = recipe.normal
+			end
 			if recipe[r.recipe_type] ~= nil then
 				for k, v in pairs(recipe[r.recipe_type]) do
 					recipe[k] = v
