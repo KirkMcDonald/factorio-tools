@@ -9,7 +9,7 @@ local function get_icon(data, path)
 		local fullpath = mod.localPath .. "/" .. icon_path
 		return {source = "file", path = fullpath}
 	else
-		return {source = "zip", zipfile = mod.zip_path, path = mod.mod_name .. "/" .. icon_path}
+		return {source = "zip", zipfile = mod.zip_path, path = mod.arc_subfolder .. icon_path}
 	end
 end
 
