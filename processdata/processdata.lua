@@ -13,41 +13,6 @@ local function get_icon(data, path)
 	end
 end
 
-local function normalize_recipe(r)
-	if r.result ~= nil then
-		local amount = r.result_count
-		if amount == nil then
-			amount = 1
-		end
-		r.results = {{
-			name = r.result,
-			amount = amount,
-		}}
-		r.result = nil
-		r.result_count = nil
-	end
-	for i, result in ipairs(r.results) do
-		if result.amount == nil then
-			r.results[i] = {name = result[1], amount = result[2]}
-		end
-	end
-	if r.energy_required == nil then
-		r.energy_required = 0.5
-	end
-	if r.category == nil then
-		r.category = "crafting"
-	end
-	local ings = {}
-	for i, ing in ipairs(r.ingredients) do
-		if ing.name == nil then
-			table.insert(ings, {name = ing[1], amount = ing[2]})
-		else
-			table.insert(ings, ing)
-		end
-	end
-	r.ingredients = ings
-end
-
 local conversion_factor = {
 	[""] = 1,
 	["k"] = 1000,
@@ -86,48 +51,370 @@ local function icon_compare(a, b)
 	return stem_a < stem_b
 end
 
--- XXX: We don't actually need this yet.
-local function localize_name(locale, name)
-	return "<dummy name>"
+local function resolve_key(locale, key)
+	local i = string.find(key, "%.")
+	if i == nil then
+		msg("bad localization key:", key)
+		return nil
+	end
+	local section = string.sub(key, 1, i-1)
+	local item_key = string.sub(key, i+1)
+	return locale[section][item_key]
+end
+
+local function localize_name_fallback(locale, name)
+	local format_key = name[1]
+	local args = name[2]
+	format = resolve_key(locale, format_key)
+	if args == nil then
+		return format
+	end
+	return string.gsub(format, "__(%d+)__", function(d)
+		local key = args[tonumber(d)]
+		return resolve_key(locale, key)
+	end)
+end
+
+-- Returns a table of the form {en = localized name} for the given raw_object,
+-- or for fallback_key (if given) if raw_object has no defined localized name.
+local function localized_name(locale, raw_object, fallback_key)
+	local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name"}
+	if raw_object.localised_name then
+		return {en = localize_name_fallback(locale, raw_object.localised_name)}
+	else
+		local result = nil
+		for _, key in ipairs({raw_object.name, fallback_key}) do
+			for _, section in ipairs(locale_sections) do
+				result = locale[section][key]
+				if result ~= nil then
+					goto found
+				end
+			end
+		end
+		::found::
+		if result == nil then
+			msg("no localized name for", raw_object.type, "named", raw_object.name)
+		else
+			result = result:gsub("__(%S*)__(%S*)__", function(section, name)
+				section = section:lower() .. "-name"
+				return locale[section][name]
+			end)
+			return {en = result}
+		end
+	end
+end
+
+local function make_icon(d)
+	return d.icon
+	--return {
+	--	path = d.icon,
+	--}
+end
+
+-- Makes item entry, but still lacking:
+--  - group
+--  - icon_col/icon_row
+--  - localized_name.en
+local function make_item(locale, d)
+	local subgroup = d.subgroup
+	if subgroup == nil then
+		subgroup = "other"
+	end
+	local name = localized_name(locale, d)
+	if name == nil then
+		return nil
+	end
+	return {
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = name,
+		order = d.order,
+		stack_size = d.stack_size,
+		subgroup = subgroup,
+		type = d.type,
+	}
+end
+
+local function make_fluid(d)
+	return {
+		default_temperature = d.default_temperature,
+		fuel_value = d.fuel_value,
+		heat_capacity = d.heat_capacity,
+		item_key = d.name,
+		max_temperature = d.max_temperature,
+	}
+end
+
+local function make_fuel(d)
+	return {
+		item_key = d.name,
+		category = d.fuel_category,
+		value = convert_power(d.fuel_value),
+	}
+end
+
+local function make_module(locale, d)
+	local e = d.effect
+	local effect = {}
+	if e.consumption then
+		effect.consumption = e.consumption.bonus
+	end
+	if e.pollution then
+		effect.pollution = e.pollution.bonus
+	end
+	if e.productivity then
+		effect.productivity = e.productivity.bonus
+	end
+	if e.quality then
+		effect.quality = e.quality.bonus
+	end
+	if e.speed then
+		effect.speed = e.speed.bonus
+	end
+	return {
+		category = d.category,
+		effect = effect,
+		item_key = d.name,
+		--limitation = d.limitation,
+	}
+end
+
+local function make_belt(locale, d)
+	return {
+		key = d.name,
+		icon = make_icon(d),
+		localized_name = localized_name(locale, d),
+		speed = d.speed,
+	}
+end
+
+-- Creates a normalized recipe table.
+-- Args:
+--		locale: The current locale.
+--		mode: "normal" or "expensive".
+--		d: The raw datum.
+--		item_map: A table mapping {[item_key] = item}
+local function make_recipe(locale, mode, d, item_map, prod_recipes)
+	-- Apply the normal/expensive mode, if present.
+	if d[mode] ~= nil then
+		d = copytable(d)
+		for k, v in pairs(d[mode]) do
+			d[k] = v
+		end
+	end
+
+	local results = {}
+	if d.results ~= nil then
+		for _, result in ipairs(d.results) do
+			if result.amount == nil then
+				table.insert(results, {name = result[1], amount = result[2]})
+			else
+				table.insert(results, {
+					name = result.name,
+					amount = result.amount,
+					-- Usually nil.
+					probability = result.probability,
+				})
+			end
+		end
+	elseif d.result ~= nil then
+		local amount = d.result_count
+		if amount == nil then
+			amount = 1
+		end
+		results = {{name = d.result, amount = amount}}
+	end
+	local allow_productivity = d.allow_productivity or prod_recipes[d.name] or false
+	local energy_required = d.energy_required
+	if energy_required == nil then
+		energy_required = 0.5
+	end
+	local category = d.category
+	if category == nil then
+		category = "crafting"
+	end
+	local ings = {}
+	for i, ing in ipairs(d.ingredients) do
+		if ing.name == nil then
+			table.insert(ings, {name = ing[1], amount = ing[2]})
+		else
+			table.insert(ings, {name = ing.name, amount = ing.amount})
+		end
+	end
+	local main_product = nil
+	if #results == 1 then
+		main_product = item_map[results[1].name]
+	end
+	-- If any of the icon, subgroup, or order are not provided, inherit
+	-- them from the result item. If there is more than one result item,
+	-- then complain.
+	local icon
+	if d.icon == nil and d.icons == nil then
+		if main_product == nil then
+			msg("main_product unexpectedly nil for", d.name)
+			return nil
+		end
+		icon = main_product.icon
+	else
+		icon = make_icon(d)
+	end
+	local subgroup
+	if d.subgroup == nil then
+		if main_product == nil then
+			msg("main_product unexpectedly nil for", d.name)
+			return nil
+		end
+		subgroup = main_product.subgroup
+	else
+		subgroup = d.subgroup
+	end
+	local order
+	if d.order == nil then
+		if main_product == nil then
+			msg("main_product unexpectedly nil for", d.name)
+			return nil
+		end
+		order = main_product.order
+	else
+		order = d.order
+	end
+	local main_product_key = nil
+	if main_product == nil then
+		--msg("main_product is nil for", d.name)
+	else
+		main_product_key = main_product.key
+	end
+	return {
+		allow_productivity = allow_productivity,
+		category = category,
+		energy_required = energy_required,
+		icon = icon,
+		ingredients = ings,
+		key = d.name,
+		localized_name = localized_name(locale, d, main_product_key),
+		order = order,
+		results = results,
+		subgroup = subgroup,
+	}
+end
+
+local function make_source(d)
+	if d.energy_source ~= nil then
+		local s = d.energy_source
+		if type(s.emissions_per_minute) == "table" then
+			-- Factorio 2
+			return {
+				emissions_per_minute = s.emissions_per_minute,
+				fuel_category = s.fuel_category,
+				type = s.type,
+			}
+		else
+			-- Factorio 1
+			return {
+				emissions_per_minute = {pollution = s.emissions_per_minute},
+				fuel_category = s.fuel_category,
+				type = s.type,
+			}
+		end
+	end
+end
+
+local function make_crafting_machine(locale, d)
+	local slots = 0
+	if d.module_specification and d.module_specification.module_slots ~= nil then
+		slots = d.module_specification.module_slots
+	end
+	return {
+		allowed_effects = d.allowed_effects,
+		crafting_categories = d.crafting_categories,
+		crafting_speed = d.crafting_speed,
+		energy_source = make_source(d),
+		energy_usage = convert_power(d.energy_usage),
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		module_slots = slots,
+	}
+end
+
+local function make_mining_drill(locale, d)
+	local slots = 0
+	if d.module_specification and d.module_specification.module_slots ~= nil then
+		slots = d.module_specification.module_slots
+	end
+	return {
+		allowed_effects = d.allowed_effects,
+		energy_source = make_source(d),
+		energy_usage = convert_power(d.energy_usage),
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		mining_speed = d.mining_speed,
+		module_slots = slots,
+		resource_categories = d.resource_categories,
+		takes_fluid = d.input_fluid_box ~= nil,
+	}
+end
+
+local function make_rocket_silo(locale, d)
+	return {
+		allowed_effects = d.allowed_effects,
+		crafting_categories = d.crafting_categories,
+		crafting_speed = d.crafting_speed,
+		--energy_source = make_source(d),
+		energy_usage = convert_power(d.energy_usage),
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		module_slots = d.module_specification.module_slots,
+	}
+end
+
+local function make_resource(locale, d)
+	local m = d.minable
+	local results
+	if m.result ~= nil then
+		results = {{name = m.result, amount = 1}}
+	else
+		results = {}
+		for _, r in pairs(m.results) do
+			table.insert(results, {
+				name = r.name,
+				amount = r.amount,
+				amount_max = r.amount_max,
+				amount_min = r.amount_min,
+				probability = r.probability,
+			})
+		end
+	end
+	return {
+		category = d.category,
+		fluid_amount = m.fluid_amount,
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		mining_time = m.mining_time,
+		required_fluid = m.required_fluid,
+		results = results,
+	}
+end
+
+local _verbose = false
+function msg(...)
+	if _verbose then
+		print(...)
+	end
 end
 
 function Process.process_data(data, locales, verbose)
-	local function msg(...)
-		if verbose then
-			print(...)
-		end
-	end
-	local function assign_localized_name(locale, raw_object, new_object, fallback)
-		local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name"}
-		if raw_object.localised_name then
-			new_object.localized_name = {en = localize_name(locale, raw_object.localised_name)}
-		else
-			local localized_name = nil
-			for _, obj in ipairs({raw_object, fallback}) do
-				for _, section in ipairs(locale_sections) do
-					localized_name = locale[section][obj.name]
-					if localized_name ~= nil then
-						goto found
-					end
-				end
-			end
-			::found::
-			if localized_name == nil then
-				msg("no localized name for", raw_object.type, "named", raw_object.name)
-			else
-				localized_name = localized_name:gsub("__(%S*)__(%S*)__", function(section, name)
-					section = section:lower() .. "-name"
-					return locale[section][name]
-				end)
-				new_object.localized_name = {en = localized_name}
-			end
-		end
-	end
+	_verbose = verbose
 
 	-- Limit it to English for now.
 	local locale = locales["en"]
-	local item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "tool"}
+
+	local item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
 	local no_module_icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]
+	msg("slot_icon_module:", no_module_icon)
 	local clock_icon = data["utility-sprites"]["default"]["clock"]["filename"]
 	local icon_paths = {[no_module_icon] = true, [clock_icon] = true}
 	-- Normalize items
@@ -141,17 +428,8 @@ function Process.process_data(data, locales, verbose)
 	end
 	local items = {}
 	local fuel = {}
-	local item_attrs = {"category", "effect", "fuel_category", "fuel_value", "icon", "icons", "limitation", "name", "order", "stack_size", "subgroup", "type"}
 	for i, item_type in ipairs(item_types) do
 		for name, item in pairs(data[item_type]) do
-			local new_item = {}
-			for j, attr in ipairs(item_attrs) do
-				if item[attr] ~= nil then
-					new_item[attr] = item[attr]
-				end
-			end
-			assign_localized_name(locale, item, new_item)
-			item = new_item
 			local subgroup
 			if item.subgroup ~= nil then
 				subgroup = item["subgroup"]
@@ -159,10 +437,14 @@ function Process.process_data(data, locales, verbose)
 				subgroup = "other"
 				item["subgroup"] = "other"
 			end
-			if subgroup == "fill-barrel" or subgroup == "bob-gas-bottle" then
+--			if subgroup == "fill-barrel" or subgroup == "bob-gas-bottle" then
+--				goto continue
+--			end
+			local new_item = make_item(locale, item)
+			if new_item == nil then
 				goto continue
 			end
-			item["group"] = item_subgroups[subgroup]["group"]
+			new_item["group"] = item_subgroups[subgroup]["group"]
 			if item.icon == nil then
 				if item.icons == nil then
 					msg("skipped:", item)
@@ -170,212 +452,129 @@ function Process.process_data(data, locales, verbose)
 				end
 				-- XXX: Temporary hack.
 				msg("hack icon:", name)
-				item["icon"] = item["icons"][1]["icon"]
-				if item.icon == nil then
+				new_item["icon"] = item["icons"][1]["icon"]
+				if new_item.icon == nil then
 					print("icon still nil:", name)
 				end
-				item["icons"] = nil
-				--item["icon"] = missing_icon
 			end
-			icon_paths[item["icon"]] = true
 			if item.fuel_value ~= nil and item.fuel_category ~= nil then
-				convert(item, "fuel_value")
-				--if "fuel_category" not in item:
-				--	print(item)
-				if item["fuel_category"] == "chemical" then
-					table.insert(fuel, name)
-				end
+				table.insert(fuel, make_fuel(item))
 			end
-			items[name] = item
+			if new_item.order == nil then
+				msg("item.order is nil for", new_item.key)
+			else
+				table.insert(items, new_item)
+			end
 			::continue::
 		end
 	end
+	table.sort(items, function(a, b) return a.order < b.order end)
 	local fluids = {}
 	for name, d in pairs(data.fluid) do
-		table.insert(fluids, name)
+		table.insert(fluids, make_fluid(d))
 	end
-	table.sort(fluids)
-	table.sort(fuel)
 	local modules = {}
-	for name, d in pairs(data["module"]) do
-		table.insert(modules, name)
+	local prod_recipes = nil
+	local prod_recipe_count = 0
+	for name, d in pairs(data.module) do
+		local m = make_module(locale, d)
+		table.insert(modules, m)
+		if d.limitation ~= nil and m.effect.productivity ~= nil then
+			if prod_recipes == nil then
+				prod_recipes = {}
+				for _, key in ipairs(d.limitation) do
+					prod_recipes[key] = true
+					prod_recipe_count = prod_recipe_count + 1
+				end
+			else
+				local match = #d.limitation == prod_recipe_count
+				if match then
+					for _, key in ipairs(d.limitation) do
+						if not prod_recipes[key] then
+							match = false
+							break
+						end
+					end
+				end
+				if not match then
+					msg("prod module limit list mismatch:", d.name)
+				end
+			end
+		end
 	end
-	table.sort(modules)
+	local belts = {}
+	for name, d in pairs(data["transport-belt"]) do
+		table.insert(belts, make_belt(locale, d))
+	end
+	local item_map = {}
+	for _, item in ipairs(items) do
+		if item_map[item.key] ~= nil then
+			print("duplicate item key:", item.key)
+		end
+		item_map[item.key] = item
+	end
+	
+	local crafters = {}
+	for _, cat in ipairs({"assembling-machine", "furnace"}) do
+		for name, d in pairs(data[cat]) do
+			table.insert(crafters, make_crafting_machine(locale, d))
+		end
+	end
+	local drills = {}
+	for name, d in pairs(data["mining-drill"]) do
+		table.insert(drills, make_mining_drill(locale, d))
+	end
+	local silo = {}
+	for name, d in pairs(data["rocket-silo"]) do
+		table.insert(silo, make_rocket_silo(locale, d))
+	end
+	local resources = {}
+	for name, d in pairs(data["resource"]) do
+		table.insert(resources, make_resource(locale, d))
+	end
+
 	local new_data = {
 		items = items,
 		fluids = fluids,
 		fuel = fuel,
+		belts = belts,
 		modules = modules,
 		groups = item_groups,
+		resources = resources,
+		crafting_machines = crafters,
+		mining_drills = drills,
+		rocket_silo = silo,
 	}
+
 	-- Normalize recipes
-	local inherited_attrs = {"subgroup", "order", "icon"}
 	local normal_recipes = {}
 	local expensive_recipes = {}
 	for name, raw_recipe in pairs(data["recipe"]) do
 		for i, r in ipairs({{recipe_type = "normal", recipes = normal_recipes}, {recipe_type = "expensive", recipes = expensive_recipes}}) do
-			local recipe = copytable(raw_recipe)
-			-- If a recipe defines a 'normal' table, but no corresponding
-			-- 'expensive' table, then reuse the normal table for both.
-			if recipe.normal ~= nil and recipe.expensive == nil then
-				recipe.expensive = recipe.normal
-			end
-			if recipe[r.recipe_type] ~= nil then
-				for k, v in pairs(recipe[r.recipe_type]) do
-					recipe[k] = v
-				end
-			end
-			recipe.expensive = nil
-			recipe.normal = nil
-			-- The main_product docs are confusing and possibly contradicted by
-			-- its observed behavior. We're going to do what I think is the most
-			-- sensible thing:
-			--
-			-- If any of the icon, subgroup, or order are not provided, inherit
-			-- them from the main_product if it is defined; otherwise, inherit 
-			-- from the (singular) result.
-			local main_product
-			if recipe.result ~= nil or recipe.results ~= nil and #recipe.results == 1 then
-				local result
-				if recipe.result ~= nil then
-					result = recipe["result"]
-				else
-					local entry = recipe["results"][1]
-					if entry.name ~= nil then
-						result = entry["name"]
-					else
-						result = entry[1]
-					end
-				end
-				if recipe.main_product ~= nil and recipe.main_product ~= "" then
-					if recipe["main_product"] ~= result then
-						msg("main_product differs from result:", name)
-					end
-				end
-				if items[result] ~= nil then
-					main_product = items[result]
-				else
-					msg("main product does not exist:", name)
-				end
-			end
-			if (main_product == nil or main_product ==  "") and items[name] ~= nil then
-				msg("fell back on name:", name)
-				main_product = items[name]
-			elseif recipe.main_product ~= nil and recipe.main_product ~= "" then
-				main_product = items[recipe["main_product"]]
-				if main_product == nil then
-					msg("main product is nil:", recipe.main_product)
-				end
-				recipe["display_name"] = main_product["name"]
-			end
-			if main_product ~= nil then
-				for i, attr in ipairs(inherited_attrs) do
-					if recipe[attr] == nil then
-						recipe[attr] = main_product[attr]
-					end
-				end
-			end
-			--if "main_product" in recipe:
-			--	item = items[recipe["main_product"]]
-			--	for attr in inherited_attrs:
-			for i, attr in ipairs(inherited_attrs) do
-				if recipe[attr] == nil then
-					msg("recipe skip:", name, "because of", attr)
-					goto continue
-				end
-			end
+			local recipe = make_recipe(locale, r.recipe_type, raw_recipe, item_map, prod_recipes)
 			if recipe.subgroup == "empty-barrel" or recipe.subgroup == "fill-barrel" then
 				goto continue
 			end
-			icon_paths[recipe.icon] = true
-			normalize_recipe(recipe)
-			assign_localized_name(locale, raw_recipe, recipe, recipe.results[1])
-			r.recipes[name] = recipe
+			table.insert(r.recipes, recipe)
 			::continue::
 		end
-	end
---		if "expensive" in recipe:
---			normal = recipe.copy()
---			del normal["expensive"]
---			del normal["normal"]
---			expensive = normal.copy()
---			normal.update(recipe["normal"])
---			normalize_recipe(normal)
---			normal_recipes[name] = normal
---			expensive.update(recipe["expensive"])
---			normalize_recipe(expensive)
---			expensive_recipes[name] = expensive
---		else:
---			normalize_recipe(recipe)
---			normal_recipes[name] = recipe
---			expensive_recipes[name] = recipe
-	-- Normalize entities
-	local entity_attrs = {
-		["accumulator"] = {"energy_source"},
-		["assembling-machine"] = {"allowed_effects", "crafting_categories", "crafting_speed", "energy_usage", "ingredient_count", "module_specification"},
-		["boiler"] = {"energy_consumption", "energy_source"},
-		["furnace"] = {"allowed_effects", "crafting_categories", "crafting_speed", "energy_source", "energy_usage", "module_specification"},
-		["generator"] = {"effectivity", "fluid_usage_per_tick"},
-		["mining-drill"] = {"energy_source", "energy_usage", "mining_power", "mining_speed", "module_specification", "resource_categories"},
-		["offshore-pump"] = {"fluid", "pumping_speed"},
-		["reactor"] = {"burner", "consumption"},
-		["resource"] = {"category", "minable"},
-		["rocket-silo"] = {"active_energy_usage", "allowed_effects", "crafting_categories", "crafting_speed", "energy_usage", "idle_energy_usage", "lamp_energy_usage", "module_specification", "rocket_parts_required"},
-		["solar-panel"] = {"production"},
-		["transport-belt"] = {"speed"},
-	}
-	for entity_type, attrs in pairs(entity_attrs) do
-		local entities = {}
-		new_data[entity_type] = entities
-		for name, entity in pairs(data[entity_type]) do
-			-- skip "hidden" entities (e.g. crash site assemblers)
-			if entity.flags ~= nil then
-				for i, flag in ipairs(entity.flags) do
-					if flag == "hidden" then
-						msg("hidden entity:", name)
-						goto continue
-					end
-				end
-			end
-			if entity.icon == nil then
-				msg("entity missing icon:", name)
-				entity["icon"] = missing_icon
-			end
-			icon_paths[entity["icon"]] = true
-			local new_entity = {name = entity.name, icon = entity.icon}
-			assign_localized_name(locale, entity, new_entity)
-			local has_modules = false
-			for i, attr in ipairs(attrs) do
-				if attr == "module_specification" then
-					has_modules = true
-				end
-				new_entity[attr] = entity[attr]
-			end
-			if new_entity.module_specification ~= nil then
-				new_entity["module_slots"] = new_entity["module_specification"]["module_slots"]
-				new_entity["module_specification"] = nil
-			elseif has_modules then
-				new_entity["module_slots"] = 0
-			end
-			if new_entity.energy_usage ~= nil then
-				convert(new_entity, "energy_usage")
-			end
-			if new_entity.minable ~= nil then
-				local m = new_entity["minable"]
-				if m.result ~= nil then
-					m["results"] = {{
-						name = m.result,
-						amount = 1,
-					}}
-					m.result = nil
-				end
-			end
-			entities[name] = new_entity
-			::continue::
-		end
-		new_data[entity_type] = entities
 	end
 
+	local icon_groups = {
+		items,
+		belts,
+		crafters,
+		drills,
+		resources,
+		silo,
+		normal_recipes,
+		expensive_recipes,
+	}
+	for _, group in ipairs(icon_groups) do
+		for _, obj in ipairs(group) do
+			icon_paths[obj.icon] = true
+		end
+	end
 	local icons = {}
 	for path, v in pairs(icon_paths) do
 		table.insert(icons, path)
@@ -392,7 +591,7 @@ function Process.process_data(data, locales, verbose)
 	end
 	local mod = icon_map[no_module_icon]
 	local clock = icon_map[clock_icon]
-	-- Add hash later.
+	-- The hash gets added later.
 	new_data["sprites"] = {
 		extra = {
 			slot_icon_module = {
@@ -407,12 +606,8 @@ function Process.process_data(data, locales, verbose)
 			},
 		},
 	}
-	local icon_sources = {new_data.items, normal_recipes, expensive_recipes}
-	for source, attrs in pairs(entity_attrs) do
-		table.insert(icon_sources, new_data[source])
-	end
-	for i, group in ipairs(icon_sources) do
-		for name, d in pairs(group) do
+	for i, group in ipairs(icon_groups) do
+		for _, d in ipairs(group) do
 			if d.icon ~= nil then
 				local i = icon_map[d.icon]
 				d["icon_col"] = i.col

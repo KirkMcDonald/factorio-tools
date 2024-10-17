@@ -23,6 +23,8 @@ import (
 
 var gameDir = flag.String("gamedir", "", "Factorio installation directory")
 var modDir = flag.String("moddir", "", "User mod directory (e.g. ~/.factorio/mods)")
+var rawFile = flag.String("raw", "", "If given, write unprocessed data.raw to the specified file, and exit.")
+var gameVersion = flag.String("gamever", "2", "Factorio major version (1 or 2)")
 
 const (
 	pxWidth  = 32
@@ -213,6 +215,7 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.PushString("library/factorioloader")
 	err = L.Call(1, 1)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error requiring loader:")
 		return FactorioData{}, err
 	}
 	// Silence log output in non-verbose mode.
@@ -225,7 +228,8 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.GetField(-1, "load_data")
 	L.PushString(gameDir)
 	L.PushString(modDir)
-	err = L.Call(2, 1)
+	L.PushString(*gameVersion)
+	err = L.Call(3, 1)
 	if err != nil {
 		return FactorioData{}, err
 	}
@@ -244,6 +248,14 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	L.GetField(-1, "process_data")
 	L.GetGlobal("data")
 	L.GetField(-1, "raw")
+	if *rawFile != "" {
+		rawData := getJSON(L)
+		err := os.WriteFile(*rawFile, []byte(rawData), 0644)
+		if err != nil {
+			return FactorioData{}, err
+		}
+		os.Exit(0)
+	}
 	L.Remove(-2)
 	L.PushValue(locales)
 	L.PushBoolean(verbose)
@@ -338,7 +350,7 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 		//      but as a hack this works for now.
 		iconWidth := icon.Bounds().Max.X
 		iconHeight := icon.Bounds().Max.Y
-		if iconWidth == 120 && iconHeight == 64 {
+		if iconWidth > 64 && iconHeight == 64 {
 			sourcePoint = image.Point{64, 0}
 		}
 		if iconWidth == 32 && iconHeight == 32 || sourcePoint != image.ZP {
