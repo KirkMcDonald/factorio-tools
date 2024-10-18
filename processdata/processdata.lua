@@ -54,8 +54,11 @@ end
 local function resolve_key(locale, key)
 	local i = string.find(key, "%.")
 	if i == nil then
-		msg("bad localization key:", key)
-		return nil
+		local s = locale[""][key]
+		if s == nil then
+			return key
+		end
+		return s
 	end
 	local section = string.sub(key, 1, i-1)
 	local item_key = string.sub(key, i+1)
@@ -66,13 +69,26 @@ local function localize_name_fallback(locale, name)
 	local format_key = name[1]
 	local args = name[2]
 	format = resolve_key(locale, format_key)
+	local literal = false
 	if args == nil then
 		return format
+	elseif type(args) ~= "table" then
+		literal = true
+		local new_args = {}
+		for i = 2, #args do
+			table.insert(new_args, args[i])
+		end
+		args = new_args
 	end
-	return string.gsub(format, "__(%d+)__", function(d)
+	local s = string.gsub(format, "__(%d+)__", function(d)
 		local key = args[tonumber(d)]
-		return resolve_key(locale, key)
+		if literal then
+			return key
+		else
+			return resolve_key(locale, key)
+		end
 	end)
+	return s
 end
 
 -- Returns a table of the form {en = localized name} for the given raw_object,
@@ -156,20 +172,27 @@ end
 local function make_module(locale, d)
 	local e = d.effect
 	local effect = {}
-	if e.consumption then
-		effect.consumption = e.consumption.bonus
-	end
-	if e.pollution then
-		effect.pollution = e.pollution.bonus
-	end
-	if e.productivity then
-		effect.productivity = e.productivity.bonus
-	end
-	if e.quality then
-		effect.quality = e.quality.bonus
-	end
-	if e.speed then
-		effect.speed = e.speed.bonus
+	if major_version == "1" then
+		if e.consumption then
+			effect.consumption = e.consumption.bonus
+		end
+		if e.pollution then
+			effect.pollution = e.pollution.bonus
+		end
+		if e.productivity then
+			effect.productivity = e.productivity.bonus
+		end
+		if e.quality then
+			effect.quality = e.quality.bonus
+		end
+		if e.speed then
+			effect.speed = e.speed.bonus
+		end
+	else
+		effect.consumption = e.consumption
+		effect.pollution = e.pollution
+		effect.productivity = e.productivity
+		effect.speed = e.speed
 	end
 	return {
 		category = d.category,
@@ -188,6 +211,10 @@ local function make_belt(locale, d)
 	}
 end
 
+local function startswith(s, prefix)
+	return string.sub(s, 1, string.len(prefix)) == prefix
+end
+
 -- Creates a normalized recipe table.
 -- Args:
 --		locale: The current locale.
@@ -195,6 +222,10 @@ end
 --		d: The raw datum.
 --		item_map: A table mapping {[item_key] = item}
 local function make_recipe(locale, mode, d, item_map, prod_recipes)
+	if startswith(d.name, "parameter-") then
+		msg("ignoring recipe", d.name)
+		return nil
+	end
 	-- Apply the normal/expensive mode, if present.
 	if d[mode] ~= nil then
 		d = copytable(d)
@@ -251,7 +282,7 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 	local icon
 	if d.icon == nil and d.icons == nil then
 		if main_product == nil then
-			msg("main_product unexpectedly nil for", d.name)
+			msg("main_product unexpectedly nil [icon] for", d.name)
 			return nil
 		end
 		icon = main_product.icon
@@ -261,7 +292,7 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 	local subgroup
 	if d.subgroup == nil then
 		if main_product == nil then
-			msg("main_product unexpectedly nil for", d.name)
+			msg("main_product unexpectedly nil [subgroup] for", d.name)
 			return nil
 		end
 		subgroup = main_product.subgroup
@@ -271,7 +302,7 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 	local order
 	if d.order == nil then
 		if main_product == nil then
-			msg("main_product unexpectedly nil for", d.name)
+			msg("main_product unexpectedly nil [order] for", d.name)
 			return nil
 		end
 		order = main_product.order
@@ -319,11 +350,20 @@ local function make_source(d)
 	end
 end
 
-local function make_crafting_machine(locale, d)
-	local slots = 0
-	if d.module_specification and d.module_specification.module_slots ~= nil then
-		slots = d.module_specification.module_slots
+local function get_slots(d)
+	if major_version == "1" then
+		if d.module_specification and d.module_specification.module_slots ~= nil then
+			return d.module_specification.module_slots
+		end
+	else
+		if d.module_slots ~= nil then
+			return d.module_slots
+		end
 	end
+	return 0
+end
+
+local function make_crafting_machine(locale, d)
 	return {
 		allowed_effects = d.allowed_effects,
 		crafting_categories = d.crafting_categories,
@@ -333,15 +373,11 @@ local function make_crafting_machine(locale, d)
 		icon = make_icon(d),
 		key = d.name,
 		localized_name = localized_name(locale, d),
-		module_slots = slots,
+		module_slots = get_slots(d),
 	}
 end
 
 local function make_mining_drill(locale, d)
-	local slots = 0
-	if d.module_specification and d.module_specification.module_slots ~= nil then
-		slots = d.module_specification.module_slots
-	end
 	return {
 		allowed_effects = d.allowed_effects,
 		energy_source = make_source(d),
@@ -350,7 +386,7 @@ local function make_mining_drill(locale, d)
 		key = d.name,
 		localized_name = localized_name(locale, d),
 		mining_speed = d.mining_speed,
-		module_slots = slots,
+		module_slots = get_slots(d),
 		resource_categories = d.resource_categories,
 		takes_fluid = d.input_fluid_box ~= nil,
 	}
@@ -366,7 +402,7 @@ local function make_rocket_silo(locale, d)
 		icon = make_icon(d),
 		key = d.name,
 		localized_name = localized_name(locale, d),
-		module_slots = d.module_specification.module_slots,
+		module_slots = get_slots(d),
 	}
 end
 
@@ -406,14 +442,53 @@ function msg(...)
 	end
 end
 
+local function sorted_keys(t)
+	local a = {}
+	for key, value in pairs(t) do
+		table.insert(a, key)
+	end
+	table.sort(a)
+	return a
+end
+
+local function sorted_pairs(t)
+	local keys = sorted_keys(t)
+	local key_indexes = {}
+	for index, key in ipairs(keys) do
+		key_indexes[key] = index
+	end
+	return function(s, var)
+		if var == nil then
+			return keys[1], t[keys[1]]
+		end
+		local i = key_indexes[var] + 1
+		if i > #keys then
+			return nil
+		end
+		local key = keys[i]
+		return key, t[key]
+	end, nil, nil
+end
+
+local major_version
+
 function Process.process_data(data, locales, verbose)
 	_verbose = verbose
+	local version = data["module_info"]["core"]["version"]
+	major_version = string.sub(version, 1, 1)
 
 	-- Limit it to English for now.
 	local locale = locales["en"]
 
-	local item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
-	local no_module_icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]
+	local item_types
+	local no_module_icon
+	if major_version == 1 then
+		item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
+		no_module_icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]
+	else
+		item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "generator", "gun", "item", "item-with-entity-data", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
+		no_module_icon = data["utility-sprites"]["default"]["empty_module_slot"]["filename"]
+	end
 	msg("slot_icon_module:", no_module_icon)
 	local clock_icon = data["utility-sprites"]["default"]["clock"]["filename"]
 	local icon_paths = {[no_module_icon] = true, [clock_icon] = true}
@@ -429,7 +504,10 @@ function Process.process_data(data, locales, verbose)
 	local items = {}
 	local fuel = {}
 	for i, item_type in ipairs(item_types) do
-		for name, item in pairs(data[item_type]) do
+		if data[item_type] == nil then
+			msg("bad item_type:", item_type)
+		end
+		for name, item in sorted_pairs(data[item_type]) do
 			local subgroup
 			if item.subgroup ~= nil then
 				subgroup = item["subgroup"]
@@ -470,13 +548,13 @@ function Process.process_data(data, locales, verbose)
 	end
 	table.sort(items, function(a, b) return a.order < b.order end)
 	local fluids = {}
-	for name, d in pairs(data.fluid) do
+	for name, d in sorted_pairs(data.fluid) do
 		table.insert(fluids, make_fluid(d))
 	end
 	local modules = {}
 	local prod_recipes = nil
 	local prod_recipe_count = 0
-	for name, d in pairs(data.module) do
+	for name, d in sorted_pairs(data.module) do
 		local m = make_module(locale, d)
 		table.insert(modules, m)
 		if d.limitation ~= nil and m.effect.productivity ~= nil then
@@ -502,8 +580,11 @@ function Process.process_data(data, locales, verbose)
 			end
 		end
 	end
+	if prod_recipes == nil then
+		prod_recipes = {}
+	end
 	local belts = {}
-	for name, d in pairs(data["transport-belt"]) do
+	for name, d in sorted_pairs(data["transport-belt"]) do
 		table.insert(belts, make_belt(locale, d))
 	end
 	local item_map = {}
@@ -516,20 +597,20 @@ function Process.process_data(data, locales, verbose)
 	
 	local crafters = {}
 	for _, cat in ipairs({"assembling-machine", "furnace"}) do
-		for name, d in pairs(data[cat]) do
+		for name, d in sorted_pairs(data[cat]) do
 			table.insert(crafters, make_crafting_machine(locale, d))
 		end
 	end
 	local drills = {}
-	for name, d in pairs(data["mining-drill"]) do
+	for name, d in sorted_pairs(data["mining-drill"]) do
 		table.insert(drills, make_mining_drill(locale, d))
 	end
 	local silo = {}
-	for name, d in pairs(data["rocket-silo"]) do
+	for name, d in sorted_pairs(data["rocket-silo"]) do
 		table.insert(silo, make_rocket_silo(locale, d))
 	end
 	local resources = {}
-	for name, d in pairs(data["resource"]) do
+	for name, d in sorted_pairs(data["resource"]) do
 		table.insert(resources, make_resource(locale, d))
 	end
 
@@ -549,10 +630,10 @@ function Process.process_data(data, locales, verbose)
 	-- Normalize recipes
 	local normal_recipes = {}
 	local expensive_recipes = {}
-	for name, raw_recipe in pairs(data["recipe"]) do
+	for name, raw_recipe in sorted_pairs(data["recipe"]) do
 		for i, r in ipairs({{recipe_type = "normal", recipes = normal_recipes}, {recipe_type = "expensive", recipes = expensive_recipes}}) do
 			local recipe = make_recipe(locale, r.recipe_type, raw_recipe, item_map, prod_recipes)
-			if recipe.subgroup == "empty-barrel" or recipe.subgroup == "fill-barrel" then
+			if not recipe or recipe.subgroup == "empty-barrel" or recipe.subgroup == "fill-barrel" then
 				goto continue
 			end
 			table.insert(r.recipes, recipe)
@@ -570,9 +651,13 @@ function Process.process_data(data, locales, verbose)
 		normal_recipes,
 		expensive_recipes,
 	}
-	for _, group in ipairs(icon_groups) do
+	for i, group in ipairs(icon_groups) do
 		for _, obj in ipairs(group) do
-			icon_paths[obj.icon] = true
+			if obj.icon == nil then
+				msg("nil icon:", i, obj.key)
+			else
+				icon_paths[obj.icon] = true
+			end
 		end
 	end
 	local icons = {}
@@ -616,7 +701,6 @@ function Process.process_data(data, locales, verbose)
 			end
 		end
 	end
-	local version = data["module_info"]["core"]["version"]
 	return {
 		data = new_data,
 		normal = normal_recipes,
