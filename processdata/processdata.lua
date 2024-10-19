@@ -1,17 +1,8 @@
 local Process = {}
 
-local missing_icon = "__core__/graphics/too-far.png"
+local Icon = require("icon")
 
-local function get_icon(data, path)
-	local mod_name, icon_path = string.match(path, "__([%w%s_%-]+)__/(.*)")
-	local mod = data.module_info[mod_name]
-	if mod.localPath ~= nil then
-		local fullpath = mod.localPath .. "/" .. icon_path
-		return {source = "file", path = fullpath}
-	else
-		return {source = "zip", zipfile = mod.zip_path, path = mod.mod_name .. "/" .. icon_path}
-	end
-end
+local missing_icon = "__core__/graphics/too-far.png"
 
 local conversion_factor = {
 	[""] = 1,
@@ -38,17 +29,8 @@ local function copytable(t)
 	return new
 end
 
-local function path_stem(path)
-	return string.match(path, ".*/([^/]*)%.[^/%.]+$")
-end
-
-local function icon_compare(a, b)
-	local stem_a = path_stem(a)
-	local stem_b = path_stem(b)
-	if stem_a == stem_b then
-		return a < b
-	end
-	return stem_a < stem_b
+local function icon_compare(icon1, icon2)
+	return icon1:comparator() < icon2:comparator()
 end
 
 local function resolve_key(locale, key)
@@ -121,10 +103,7 @@ local function localized_name(locale, raw_object, fallback_key)
 end
 
 local function make_icon(d)
-	return d.icon
-	--return {
-	--	path = d.icon,
-	--}
+	return Icon.new(d)
 end
 
 -- Makes item entry, but still lacking:
@@ -482,16 +461,18 @@ function Process.process_data(data, locales, verbose)
 
 	local item_types
 	local no_module_icon
-	if major_version == 1 then
+	if major_version == "1" then
 		item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "gun", "item", "item-with-entity-data", "mining-tool", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
-		no_module_icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]
+		no_module_icon = {icon = data["utility-sprites"]["default"]["slot_icon_module"]["filename"]}
 	else
 		item_types = {"ammo", "armor", "blueprint", "blueprint-book", "capsule", "deconstruction-item", "fluid", "generator", "gun", "item", "item-with-entity-data", "module", "rail-planner", "repair-tool", "spidertron-remote", "tool"}
-		no_module_icon = data["utility-sprites"]["default"]["empty_module_slot"]["filename"]
+		no_module_icon = {icon = data["utility-sprites"]["default"]["empty_module_slot"]["filename"]}
 	end
-	msg("slot_icon_module:", no_module_icon)
-	local clock_icon = data["utility-sprites"]["default"]["clock"]["filename"]
-	local icon_paths = {[no_module_icon] = true, [clock_icon] = true}
+	msg("slot_icon_module:", no_module_icon.icon)
+	local clock_icon = {icon = data["utility-sprites"]["default"]["clock"]["filename"]}
+	no_module_icon.icon = make_icon(no_module_icon)
+	clock_icon.icon = make_icon(clock_icon)
+	local special_icons = {no_module_icon, clock_icon}
 	-- Normalize items
 	local item_groups = {}
 	for name, d in pairs(data["item-group"]) do
@@ -523,18 +504,6 @@ function Process.process_data(data, locales, verbose)
 				goto continue
 			end
 			new_item["group"] = item_subgroups[subgroup]["group"]
-			if item.icon == nil then
-				if item.icons == nil then
-					msg("skipped:", item)
-					goto continue
-				end
-				-- XXX: Temporary hack.
-				msg("hack icon:", name)
-				new_item["icon"] = item["icons"][1]["icon"]
-				if new_item.icon == nil then
-					print("icon still nil:", name)
-				end
-			end
 			if item.fuel_value ~= nil and item.fuel_category ~= nil then
 				table.insert(fuel, make_fuel(item))
 			end
@@ -650,32 +619,37 @@ function Process.process_data(data, locales, verbose)
 		silo,
 		normal_recipes,
 		expensive_recipes,
+		special_icons,
 	}
+	local icon_set = {}
 	for i, group in ipairs(icon_groups) do
 		for _, obj in ipairs(group) do
 			if obj.icon == nil then
 				msg("nil icon:", i, obj.key)
 			else
-				icon_paths[obj.icon] = true
+				-- Ensure all matching icons are using the same icon object.
+				local existing = icon_set[obj.icon:key()]
+				if existing then
+					obj.icon = existing
+				else
+					icon_set[obj.icon:key()] = obj.icon
+				end
 			end
 		end
 	end
 	local icons = {}
-	for path, v in pairs(icon_paths) do
-		table.insert(icons, path)
+	for key, icon in pairs(icon_set) do
+		icon:add_sources(data)
+		table.insert(icons, icon)
 	end
 	table.sort(icons, icon_compare)
 	local width = math.floor(math.sqrt(#icons))
-	local icon_map = {}
-	local resolved_icons = {}
-	for i, path in ipairs(icons) do
-		local row = math.floor((i - 1) / width)
-		local col = (i - 1) % width
-		icon_map[path] = {col = col, row = row}
-		table.insert(resolved_icons, get_icon(data, path))
+	for i, icon in ipairs(icons) do
+		icon.row = math.floor((i - 1) / width)
+		icon.col = (i - 1) % width
 	end
-	local mod = icon_map[no_module_icon]
-	local clock = icon_map[clock_icon]
+	local mod = no_module_icon
+	local clock = clock_icon
 	-- The hash gets added later.
 	new_data["sprites"] = {
 		extra = {
@@ -691,10 +665,10 @@ function Process.process_data(data, locales, verbose)
 			},
 		},
 	}
-	for i, group in ipairs(icon_groups) do
+	for _, group in ipairs(icon_groups) do
 		for _, d in ipairs(group) do
 			if d.icon ~= nil then
-				local i = icon_map[d.icon]
+				local i = d.icon
 				d["icon_col"] = i.col
 				d["icon_row"] = i.row
 				d.icon = nil
@@ -705,7 +679,7 @@ function Process.process_data(data, locales, verbose)
 		data = new_data,
 		normal = normal_recipes,
 		expensive = expensive_recipes,
-		icons = resolved_icons,
+		icons = icons,
 		width = width,
 		version = version,
 	}

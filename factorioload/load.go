@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"golang.org/x/image/draw"
 	"image/png"
 	"io"
@@ -263,6 +264,9 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 	if err != nil {
 		return FactorioData{}, err
 	}
+	if verbose {
+		fmt.Fprintln(os.Stderr, "data processed")
+	}
 	L.GetField(-1, "version")
 	version := L.CheckString(-1)
 	L.Pop(1)
@@ -285,79 +289,132 @@ func LoadData(processDataBox, loaderLibBox packr.Box, verbose bool) (FactorioDat
 
 	for i := 0; i < length; i++ {
 		L.PushInteger(int64(i + 1))
+		// ..., icon
 		L.GetTable(-2)
-		L.GetField(-1, "source")
-		source := L.CheckString(-1)
+		// ..., icon, icon_list
+		L.GetField(-1, "icon_list")
+		L.Len(-1)
+		icons_length := L.CheckInteger(-1)
 		L.Pop(1)
-		L.GetField(-1, "path")
-		path := L.CheckString(-1)
-		L.Pop(1)
-		var iconFile io.ReadCloser
-		if source == "file" {
-			var err error
-			iconFile, err = os.Open(path)
-			if err != nil {
-				return FactorioData{}, err
-			}
-		} else if source == "zip" {
-			L.GetField(-1, "zipfile")
-			zippath := L.CheckString(-1)
+		for j := 1; j <= icons_length; j++ {
+			L.PushInteger(int64(j))
+			L.GetTable(-2)
+			L.GetField(-1, "source")
+			source := L.CheckString(-1)
 			L.Pop(1)
-			files := zipCache[zippath]
-			if files == nil {
-				archive, err := zip.OpenReader(zippath)
+			L.GetField(-1, "path")
+			path := L.CheckString(-1)
+			L.Pop(1)
+			var iconFile io.ReadCloser
+			if source == "file" {
+				var err error
+				iconFile, err = os.Open(path)
 				if err != nil {
 					return FactorioData{}, err
 				}
-				defer func() {
-					err := archive.Close()
+			} else if source == "zip" {
+				L.GetField(-1, "zipfile")
+				zippath := L.CheckString(-1)
+				L.Pop(1)
+				files := zipCache[zippath]
+				if files == nil {
+					archive, err := zip.OpenReader(zippath)
 					if err != nil {
-						fmt.Fprintln(os.Stderr, err)
+						return FactorioData{}, err
 					}
-				}()
-				files = make(map[string]*zip.File)
-				for _, file := range archive.File {
-					files[file.Name] = file
+					defer func() {
+						err := archive.Close()
+						if err != nil {
+							fmt.Fprintln(os.Stderr, err)
+						}
+					}()
+					files = make(map[string]*zip.File)
+					for _, file := range archive.File {
+						files[file.Name] = file
+					}
+					zipCache[zippath] = files
 				}
-				zipCache[zippath] = files
+				var err error
+				iconFile, err = files[path].Open()
+				if err != nil {
+					return FactorioData{}, err
+				}
 			}
-			var err error
-			iconFile, err = files[path].Open()
+			icon, _, err := image.Decode(iconFile)
 			if err != nil {
 				return FactorioData{}, err
 			}
+			err = iconFile.Close()
+			if err != nil {
+				return FactorioData{}, err
+			}
+			// Apply tint, if present.
+			L.GetField(-1, "tint")
+			if !L.IsNil(-1) {
+				L.PushInteger(1)
+				L.GetTable(-2)
+				r := L.CheckNumber(-1)
+				L.Pop(1)
+				L.PushInteger(2)
+				L.GetTable(-2)
+				g := L.CheckNumber(-1)
+				L.Pop(1)
+				L.PushInteger(3)
+				L.GetTable(-2)
+				b := L.CheckNumber(-1)
+				L.Pop(1)
+				L.PushInteger(4)
+				L.GetTable(-2)
+				a := float64(1.0)
+				if !L.IsNil(-1) {
+					a = L.CheckNumber(-1)
+				}
+				L.Pop(1)
+				dstIcon := icon.(draw.Image)
+				bound := dstIcon.Bounds()
+				for x := bound.Min.X; x < bound.Max.X; x++ {
+					for y := bound.Min.Y; y < bound.Max.Y; y++ {
+						c := dstIcon.At(x, y)
+						oR, oG, oB, oA := c.RGBA()
+						newC := color.RGBA{
+							uint8(float64(oR) * r * 0xFF / 0xFFFF),
+							uint8(float64(oG) * g * 0xFF / 0xFFFF),
+							uint8(float64(oB) * b * 0xFF / 0xFFFF),
+							uint8(float64(oA) * a * 0xFF / 0xFFFF),
+						}
+						dstIcon.Set(x, y, newC)
+					}
+				}
+			}
+			L.Pop(1)
+			row := i / width
+			col := i % width
+			dest := image.Point{col * pxWidth, row * pxHeight}
+			r := image.Rectangle{dest, dest.Add(image.Point{pxWidth, pxHeight})}
+			sourcePoint := image.ZP
+			// There are three kinds of icon files, which we need to treat in
+			// three differen ways:
+			//   - 32x32 images. Use these unchanged.
+			//   - 120x64 mipmaps. Grab the 32x32 image at offset (64, 0).
+			//   - Square icons of larger size, usually 64x64. Scale these to
+			//     32x32.
+			// XXX: Ideally we'd actually use the relevant "icon_mipmaps" value,
+			//      but as a hack this works for now.
+			iconWidth := icon.Bounds().Max.X
+			iconHeight := icon.Bounds().Max.Y
+			if iconWidth > 64 && iconHeight == 64 {
+				sourcePoint = image.Point{64, 0}
+			}
+			if iconWidth == 32 && iconHeight == 32 || sourcePoint != image.ZP {
+				draw.Draw(im, r, icon, sourcePoint, draw.Over)
+			} else {
+				draw.BiLinear.Scale(im, r, icon, icon.Bounds(), draw.Over, nil)
+			}
+			// pop current (singular) icon
+			L.Pop(1)
 		}
-		icon, _, err := image.Decode(iconFile)
-		if err != nil {
-			return FactorioData{}, err
-		}
-		err = iconFile.Close()
-		if err != nil {
-			return FactorioData{}, err
-		}
-		row := i / width
-		col := i % width
-		dest := image.Point{col * pxWidth, row * pxHeight}
-		r := image.Rectangle{dest, dest.Add(image.Point{pxWidth, pxHeight})}
-		sourcePoint := image.ZP
-		// There are three kinds of icon files, which we need to treat in
-		// three differen ways:
-		//   - 32x32 images. Use these unchanged.
-		//   - 120x64 mipmaps. Grab the 32x32 image at offset (64, 0).
-		//   - Square icons of larger size, usually 64x64. Scale these to
-		//     32x32.
-		// XXX: Ideally we'd actually use the relevant "icon_mipmaps" value,
-		//      but as a hack this works for now.
-		iconWidth := icon.Bounds().Max.X
-		iconHeight := icon.Bounds().Max.Y
-		if iconWidth > 64 && iconHeight == 64 {
-			sourcePoint = image.Point{64, 0}
-		}
-		if iconWidth == 32 && iconHeight == 32 || sourcePoint != image.ZP {
-			draw.Draw(im, r, icon, sourcePoint, draw.Src)
-		} else {
-			draw.BiLinear.Scale(im, r, icon, icon.Bounds(), draw.Src, nil)
-		}
+		// pop icon_list
+		L.Pop(1)
 		// pop current icon
 		L.Pop(1)
 	}
