@@ -6,12 +6,15 @@ local missing_icon = "__core__/graphics/too-far.png"
 
 local conversion_factor = {
 	[""] = 1,
-	["k"] = 1000,
+	["K"] = 1000,
 	["M"] = 1000000,
 	["G"] = 1000000000,
 }
 
+local major_version
+
 local function convert_power(s)
+	s = string.upper(s)
 	local quantity, unit = string.match(s, "([^%a]+)(%a?)[WJ]")
 	local factor = conversion_factor[unit]
 	return tonumber(quantity) * factor
@@ -57,8 +60,8 @@ local function localize_name_fallback(locale, name)
 	elseif type(args) ~= "table" then
 		literal = true
 		local new_args = {}
-		for i = 2, #args do
-			table.insert(new_args, args[i])
+		for i = 2, #name do
+			table.insert(new_args, name[i])
 		end
 		args = new_args
 	end
@@ -131,10 +134,14 @@ local function make_item(locale, d)
 end
 
 local function make_fluid(d)
+	local capacity
+	if d.heat_capacity then
+		capacity = convert_power(d.heat_capacity)
+	end
 	return {
 		default_temperature = d.default_temperature,
 		fuel_value = d.fuel_value,
-		heat_capacity = d.heat_capacity,
+		heat_capacity = capacity,
 		item_key = d.name,
 		max_temperature = d.max_temperature,
 	}
@@ -311,18 +318,24 @@ end
 local function make_source(d)
 	if d.energy_source ~= nil then
 		local s = d.energy_source
+		local category
+		if s.fuel_categories then
+			category = s.fuel_categories[1]
+		else
+			category = s.fuel_category
+		end
 		if type(s.emissions_per_minute) == "table" then
 			-- Factorio 2
 			return {
 				emissions_per_minute = s.emissions_per_minute,
-				fuel_category = s.fuel_category,
+				fuel_category = category,
 				type = s.type,
 			}
 		else
 			-- Factorio 1
 			return {
 				emissions_per_minute = {pollution = s.emissions_per_minute},
-				fuel_category = s.fuel_category,
+				fuel_category = category,
 				type = s.type,
 			}
 		end
@@ -414,6 +427,26 @@ local function make_resource(locale, d)
 	}
 end
 
+local function make_boiler(locale, d)
+	return {
+		energy_consumption = convert_power(d.energy_consumption),
+		energy_source = make_source(d),
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		target_temperature = d.target_temperature,
+	}
+end
+
+local function make_offshore_pump(locale, d)
+	return {
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		pumping_speed = d.pumping_speed,
+	}
+end
+
 local _verbose = false
 function msg(...)
 	if _verbose then
@@ -448,8 +481,6 @@ local function sorted_pairs(t)
 		return key, t[key]
 	end, nil, nil
 end
-
-local major_version
 
 function Process.process_data(data, locales, verbose)
 	_verbose = verbose
@@ -582,6 +613,14 @@ function Process.process_data(data, locales, verbose)
 	for name, d in sorted_pairs(data["resource"]) do
 		table.insert(resources, make_resource(locale, d))
 	end
+	local boilers = {}
+	for name, d in sorted_pairs(data["boiler"]) do
+		table.insert(boilers, make_boiler(locale, d))
+	end
+	local pumps = {}
+	for name, d in sorted_pairs(data["offshore-pump"]) do
+		table.insert(pumps, make_offshore_pump(locale, d))
+	end
 
 	local new_data = {
 		items = items,
@@ -591,6 +630,8 @@ function Process.process_data(data, locales, verbose)
 		modules = modules,
 		groups = item_groups,
 		resources = resources,
+		boilers = boilers,
+		offshore_pumps = pumps,
 		crafting_machines = crafters,
 		mining_drills = drills,
 		rocket_silo = silo,
@@ -617,6 +658,8 @@ function Process.process_data(data, locales, verbose)
 		drills,
 		resources,
 		silo,
+		boilers,
+		pumps,
 		normal_recipes,
 		expensive_recipes,
 		special_icons,
@@ -655,15 +698,23 @@ function Process.process_data(data, locales, verbose)
 		extra = {
 			slot_icon_module = {
 				name = "no module",
-				icon_col = mod.col,
-				icon_row = mod.row,
+				icon_col = mod.icon.col,
+				icon_row = mod.icon.row,
 			},
 			clock = {
 				name = "time",
-				icon_col = clock.col,
-				icon_row = clock.row,
+				icon_col = clock.icon.col,
+				icon_row = clock.icon.row,
 			},
 		},
+	}
+	local beacon = data.beacon.beacon
+	new_data["beacon"] = {
+		allowed_effects = beacon.allowed_effects,
+		distribution_effectivity = beacon.distribution_effectivity,
+		energy_usage = convert_power(beacon.energy_usage),
+		-- Will be nil in <2.0.
+		profile = beacon.profile
 	}
 	for _, group in ipairs(icon_groups) do
 		for _, d in ipairs(group) do
