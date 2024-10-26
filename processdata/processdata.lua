@@ -79,7 +79,7 @@ end
 -- Returns a table of the form {en = localized name} for the given raw_object,
 -- or for fallback_key (if given) if raw_object has no defined localized name.
 local function localized_name(locale, raw_object, fallback_key)
-	local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name"}
+	local locale_sections = {"recipe-name", "item-name", "fluid-name", "equipment-name", "entity-name", "space-location-name", "surface-name"}
 	if raw_object.localised_name then
 		return {en = localize_name_fallback(locale, raw_object.localised_name)}
 	else
@@ -201,6 +201,14 @@ local function startswith(s, prefix)
 	return string.sub(s, 1, string.len(prefix)) == prefix
 end
 
+local function make_condition(d)
+	return {
+		max = d.max,
+		min = d.min,
+		property = d.property,
+	}
+end
+
 -- Creates a normalized recipe table.
 -- Args:
 --		locale: The current locale.
@@ -259,7 +267,9 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 		end
 	end
 	local main_product = nil
-	if #results == 1 then
+	if d.main_product then
+		main_product = item_map[d.main_product]
+	elseif #results == 1 then
 		main_product = item_map[results[1].name]
 	end
 	-- If any of the icon, subgroup, or order are not provided, inherit
@@ -289,9 +299,12 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 	if d.order == nil then
 		if main_product == nil then
 			msg("main_product unexpectedly nil [order] for", d.name)
-			return nil
+			-- Don't discount recipe for lacking an order, e.g. recycling.
+			--return nil
+			order = nil
+		else
+			order = main_product.order
 		end
-		order = main_product.order
 	else
 		order = d.order
 	end
@@ -300,6 +313,13 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 		--msg("main_product is nil for", d.name)
 	else
 		main_product_key = main_product.key
+	end
+	local conditions = nil
+	if d.surface_conditions then
+		conditions = {}
+		for _, c in ipairs(d.surface_conditions) do
+			table.insert(conditions, make_condition(c))
+		end
 	end
 	return {
 		allow_productivity = allow_productivity,
@@ -312,6 +332,7 @@ local function make_recipe(locale, mode, d, item_map, prod_recipes)
 		order = order,
 		results = results,
 		subgroup = subgroup,
+		surface_conditions = conditions,
 	}
 end
 
@@ -356,6 +377,17 @@ local function get_slots(d)
 end
 
 local function make_crafting_machine(locale, d)
+	local conditions = nil
+	if d.surface_conditions then
+		conditions = {}
+		for _, c in ipairs(d.surface_conditions) do
+			table.insert(conditions, make_condition(c))
+		end
+	end
+	local prod = 0
+	if d.effect_receiver and d.effect_receiver.base_effect and d.effect_receiver.base_effect.productivity then
+		prod = d.effect_receiver.base_effect.productivity
+	end
 	return {
 		allowed_effects = d.allowed_effects,
 		crafting_categories = d.crafting_categories,
@@ -366,6 +398,8 @@ local function make_crafting_machine(locale, d)
 		key = d.name,
 		localized_name = localized_name(locale, d),
 		module_slots = get_slots(d),
+		prod_bonus = prod,
+		surface_conditions = conditions,
 	}
 end
 
@@ -444,6 +478,58 @@ local function make_offshore_pump(locale, d)
 		key = d.name,
 		localized_name = localized_name(locale, d),
 		pumping_speed = d.pumping_speed,
+	}
+end
+
+local function make_surface_property(d)
+	return {
+		name = d.name,
+		default_value = d.default_value,
+	}
+end
+
+local function make_planet(locale, d, resource_set, tile)
+	local local_resources = {}
+	local offshore_set = {}
+	if d.map_gen_settings then
+		for key, _ in pairs(d.map_gen_settings.autoplace_settings.entity.settings) do
+			if resource_set[key] then
+				local_resources[key] = true
+			end
+		end
+		for key, _ in pairs(d.map_gen_settings.autoplace_settings.tile.settings) do
+			if tile[key] then
+				offshore_set[tile[key]] = true
+			end
+		end
+	end
+	local resource = {}
+	for r, _ in pairs(local_resources) do
+		table.insert(resource, r)
+	end
+	table.sort(resource)
+	local offshore = {}
+	for f, _ in pairs(offshore_set) do
+		table.insert(offshore, f)
+	end
+	table.sort(offshore)
+	local p = d.surface_properties
+	return {
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		order = d.order,
+		resources = {
+			resource = resource,
+			offshore = offshore,
+		},
+		surface_properties = {
+			["day-night-cycle"] = p["day-night-cycle"],
+			gravity = p.gravity,
+			["magnetic-field"] = p["magnetic-field"],
+			pressure = p.pressure,
+			["solar-power"] = p["solar-power"],
+		}
 	}
 end
 
@@ -621,6 +707,42 @@ function Process.process_data(data, locales, verbose)
 	for name, d in sorted_pairs(data["offshore-pump"]) do
 		table.insert(pumps, make_offshore_pump(locale, d))
 	end
+	local properties = {}
+	for name, d in sorted_pairs(data["surface-property"]) do
+		table.insert(properties, make_surface_property(d))
+	end
+
+	-- Process map generation controls, to pick out resources.
+	local function append(m, k, v)
+		local d = m[k]
+		if d == nil then
+			d = {}
+			m[k] = d
+		end
+		d[v] = true
+	end
+
+	-- Maps resource.autoplace.control to array of resource names harvestable
+	-- from that control.
+	local resource_set = {}
+	for resource_key, resource in pairs(data.resource) do
+		resource_set[resource_key] = true
+	end
+	-- Maps tile name to fluid pumpable from that tile.
+	local tile_map = {}
+	for tile_key, tile in pairs(data.tile) do
+		if tile.fluid then
+			tile_map[tile_key] = tile.fluid
+		end
+	end
+	local planets = {}
+	for _, section in ipairs({"planet", "surface"}) do
+		if data[section] then
+			for name, d in sorted_pairs(data[section]) do
+				table.insert(planets, make_planet(locale, d, resource_set, tile_map))
+			end
+		end
+	end
 
 	local new_data = {
 		items = items,
@@ -635,6 +757,8 @@ function Process.process_data(data, locales, verbose)
 		crafting_machines = crafters,
 		mining_drills = drills,
 		rocket_silo = silo,
+		surface_properties = properties,
+		planets = planets,
 	}
 
 	-- Normalize recipes
@@ -660,6 +784,7 @@ function Process.process_data(data, locales, verbose)
 		silo,
 		boilers,
 		pumps,
+		planets,
 		normal_recipes,
 		expensive_recipes,
 		special_icons,
