@@ -155,6 +155,14 @@ local function make_fuel(d)
 	}
 end
 
+local function make_spoilage(d)
+	return {
+		from_item = d.name,
+		to_item = d.spoil_result,
+		time = d.spoil_ticks,
+	}
+end
+
 local function make_module(locale, d)
 	local e = d.effect
 	local effect = {}
@@ -481,6 +489,44 @@ local function make_offshore_pump(locale, d)
 	}
 end
 
+local function make_agricultural_tower(locale, d)
+	return {
+		energy_source = make_source(d),
+		energy_usage = convert_power(d.energy_usage),
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+	}
+end
+
+local function make_plant(locale, d, seed_map)
+	local results = {}
+	for _, r in ipairs(d.minable.results) do
+		table.insert(results, {
+			amount = r.amount,
+			name = r.name,
+			probability = r.probability,
+		})
+	end
+	local conditions = nil
+	if d.surface_conditions then
+		conditions = {}
+		for _, c in ipairs(d.surface_conditions) do
+			table.insert(conditions, make_condition(c))
+		end
+	end
+	return {
+		growth_ticks = d.growth_ticks,
+		icon = make_icon(d),
+		key = d.name,
+		localized_name = localized_name(locale, d),
+		order = d.order,
+		results = results,
+		seed = seed_map[d.name],
+		surface_conditions = conditions,
+	}
+end
+
 local function make_surface_property(d)
 	return {
 		name = d.name,
@@ -488,10 +534,17 @@ local function make_surface_property(d)
 	}
 end
 
-local function make_planet(locale, d, resource_set, tile)
+local function make_planet(locale, d, resource_set, tile, plant_map)
 	local local_resources = {}
 	local offshore_set = {}
+	local plant_set = {}
 	if d.map_gen_settings then
+		for key, _ in pairs(d.map_gen_settings.autoplace_controls) do
+			local plants = plant_map[key]
+			if plants then
+				plant_set = plants
+			end
+		end
 		for key, _ in pairs(d.map_gen_settings.autoplace_settings.entity.settings) do
 			if resource_set[key] then
 				local_resources[key] = true
@@ -513,6 +566,11 @@ local function make_planet(locale, d, resource_set, tile)
 		table.insert(offshore, f)
 	end
 	table.sort(offshore)
+	local plants = {}
+	for p, _ in pairs(plant_set) do
+		table.insert(plants, p)
+	end
+	table.sort(plants)
 	local p = d.surface_properties
 	return {
 		icon = make_icon(d),
@@ -522,6 +580,7 @@ local function make_planet(locale, d, resource_set, tile)
 		resources = {
 			resource = resource,
 			offshore = offshore,
+			plants = plants,
 		},
 		surface_properties = {
 			["day-night-cycle"] = p["day-night-cycle"],
@@ -601,6 +660,8 @@ function Process.process_data(data, locales, verbose)
 	end
 	local items = {}
 	local fuel = {}
+	local spoilage = {}
+	local seed_map = {}
 	for i, item_type in ipairs(item_types) do
 		if data[item_type] == nil then
 			msg("bad item_type:", item_type)
@@ -623,6 +684,12 @@ function Process.process_data(data, locales, verbose)
 			new_item["group"] = item_subgroups[subgroup]["group"]
 			if item.fuel_value ~= nil and item.fuel_category ~= nil then
 				table.insert(fuel, make_fuel(item))
+			end
+			if item.spoil_result ~= nil then
+				table.insert(spoilage, make_spoilage(item))
+			end
+			if item.plant_result ~= nil then
+				seed_map[item.plant_result] = item.name
 			end
 			if new_item.order == nil then
 				msg("item.order is nil for", new_item.key)
@@ -707,6 +774,10 @@ function Process.process_data(data, locales, verbose)
 	for name, d in sorted_pairs(data["offshore-pump"]) do
 		table.insert(pumps, make_offshore_pump(locale, d))
 	end
+	local ag_towers = {}
+	for name, d in sorted_pairs(data["agricultural-tower"]) do
+		table.insert(ag_towers, make_agricultural_tower(locale, d))
+	end
 	local properties = {}
 	for name, d in sorted_pairs(data["surface-property"]) do
 		table.insert(properties, make_surface_property(d))
@@ -722,6 +793,14 @@ function Process.process_data(data, locales, verbose)
 		d[v] = true
 	end
 
+	local plants = {}
+	local plant_map = {}
+	for name, d in sorted_pairs(data["plant"]) do
+		table.insert(plants, make_plant(locale, d, seed_map))
+		if d.autoplace then
+			append(plant_map, d.autoplace.control, name)
+		end
+	end
 	-- Maps resource.autoplace.control to array of resource names harvestable
 	-- from that control.
 	local resource_set = {}
@@ -739,7 +818,7 @@ function Process.process_data(data, locales, verbose)
 	for _, section in ipairs({"planet", "surface"}) do
 		if data[section] then
 			for name, d in sorted_pairs(data[section]) do
-				table.insert(planets, make_planet(locale, d, resource_set, tile_map))
+				table.insert(planets, make_planet(locale, d, resource_set, tile_map, plant_map))
 			end
 		end
 	end
@@ -748,12 +827,15 @@ function Process.process_data(data, locales, verbose)
 		items = items,
 		fluids = fluids,
 		fuel = fuel,
+		spoilage = spoilage,
 		belts = belts,
 		modules = modules,
 		groups = item_groups,
 		resources = resources,
+		plants = plants,
 		boilers = boilers,
 		offshore_pumps = pumps,
+		agricultural_tower = ag_towers,
 		crafting_machines = crafters,
 		mining_drills = drills,
 		rocket_silo = silo,
@@ -784,6 +866,8 @@ function Process.process_data(data, locales, verbose)
 		silo,
 		boilers,
 		pumps,
+		ag_towers,
+		plants,
 		planets,
 		normal_recipes,
 		expensive_recipes,
